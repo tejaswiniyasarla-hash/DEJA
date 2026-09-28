@@ -18,7 +18,7 @@ HINDSIGHT_API_KEY = os.getenv("HINDSIGHT_API_KEY")
 HINDSIGHT_BASE_URL = os.getenv("HINDSIGHT_BASE_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-BANK_ID = "deja-freelancer"
+BANK_ID = "deja-demo"
 MODEL = "openai/gpt-oss-120b"
 
 st.set_page_config(page_title="DEJA", page_icon="✨", layout="centered")
