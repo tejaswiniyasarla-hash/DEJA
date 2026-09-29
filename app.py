@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
@@ -12,18 +13,23 @@ def run_async(coro):
         return executor.submit(lambda: asyncio.run(coro)).result()
 
 
+def client_bank_id(client_name: str) -> str:
+    """Turn a client name into a safe, unique bank id, e.g. 'Sarah ' -> 'deja-client-sarah'."""
+    normalized = client_name.strip().lower()
+    normalized = re.sub(r"[^a-z0-9]+", "-", normalized).strip("-")
+    return f"deja-client-{normalized}"
+
+
 load_dotenv()
 
 HINDSIGHT_API_KEY = os.getenv("HINDSIGHT_API_KEY")
 HINDSIGHT_BASE_URL = os.getenv("HINDSIGHT_BASE_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-BANK_ID = "deja-demo"
 MODEL = "openai/gpt-oss-120b"
 
 st.set_page_config(page_title="DEJA", page_icon="✨", layout="centered")
 
-# Small touch of minimal styling on top of the theme file
 st.markdown(
     """
     <style>
@@ -58,24 +64,25 @@ except Exception as e:
     st.error(f"Could not connect to Groq: {e}")
     st.stop()
 
-# Create the memory bank (safe to ignore if it already exists)
-try:
-    run_async(hindsight.acreate_bank(
-        bank_id=BANK_ID,
-        name="DEJA Freelancer Memory",
-        mission=(
-            "Remember important information about freelance clients, "
-            "including recurring preferences, feedback, requirements, "
-            "communication patterns, payment habits, and project history."
-        ),
-    ))
-except Exception:
-    pass
+
+def ensure_bank(bank_id: str, client_name: str):
+    """Create this client's dedicated bank if it doesn't exist yet."""
+    try:
+        run_async(hindsight.acreate_bank(
+            bank_id=bank_id,
+            name=f"DEJA memory for {client_name}",
+            mission=(
+                f"Remember important information specifically about the client "
+                f"{client_name}: preferences, feedback, payment habits, scope "
+                f"changes, communication style, and project history."
+            ),
+        ))
+    except Exception:
+        pass  # bank already exists, which is fine
 
 
 # ---------------------------------------------------------
-# SAVE CALLBACK (runs BEFORE the page redraws, so it can
-# safely clear the input fields after a successful save)
+# SAVE CALLBACK
 # ---------------------------------------------------------
 def save_project():
     client = st.session_state.get("log_client", "").strip()
@@ -87,7 +94,10 @@ def save_project():
             "warning",
             "Please enter the client name and what you learned.",
         )
-        return  # keep the fields as they are
+        return
+
+    bank_id = client_bank_id(client)
+    ensure_bank(bank_id, client)
 
     memory = (
         f"Client: {client}\n"
@@ -97,19 +107,17 @@ def save_project():
 
     try:
         run_async(hindsight.aretain(
-            bank_id=BANK_ID,
+            bank_id=bank_id,
             content=memory,
             context="freelancer client history",
         ))
     except Exception as e:
-        # Save failed: do NOT clear the fields
         st.session_state["save_status"] = (
             "error",
             f"Could not save the memory: {e}",
         )
         return
 
-    # Save succeeded: clear the three fields
     st.session_state["log_client"] = ""
     st.session_state["log_project"] = ""
     st.session_state["log_notes"] = ""
@@ -142,7 +150,6 @@ with tab1:
 
     st.button("Save to DEJA", use_container_width=True, on_click=save_project)
 
-    # Show the result of the last save attempt
     status = st.session_state.pop("save_status", None)
     if status:
         kind, message = status
@@ -171,11 +178,12 @@ with tab2:
         if not brief_client:
             st.warning("Please enter a client name.")
         else:
-            # ---- RECALL FROM HINDSIGHT ----
+            bank_id = client_bank_id(brief_client)
+
             try:
                 with st.spinner("Recalling from memory..."):
                     results = run_async(hindsight.arecall(
-                        bank_id=BANK_ID,
+                        bank_id=bank_id,
                         query=(
                             f"Everything about client {brief_client}: preferences, "
                             f"feedback, payment habits, scope changes, communication "
@@ -186,7 +194,8 @@ with tab2:
                     ))
                 memories = [r.text for r in results.results]
             except Exception as e:
-                st.error(f"Could not recall memories from Hindsight: {e}")
+                # A brand-new client has no bank yet, which Hindsight may report
+                # as an error rather than an empty result. Treat that as "no history".
                 memories = []
 
             col1, col2 = st.columns(2)
